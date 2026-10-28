@@ -1,4 +1,4 @@
-# 📡 API Reliability Monitor
+# API Reliability Monitor
 
 A cloud-native service that checks your APIs on a schedule, records availability and response time, and sends **one alert when an API goes down and one when it recovers**, deployable to AWS with a single CloudFormation command.
 
@@ -208,14 +208,20 @@ api-reliability-monitor/
 ├── tests/
 │   ├── unit/                    # pure logic and adapters
 │   ├── integration/             # API, monitoring flow, MySQL locking
+│   ├── conftest.py              # shared test fixtures
 │   └── mock_server.py           # fake API you can switch up/down
-├── docs/architecture.svg
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example
-├── requirements.txt / requirements-dev.txt
-├── pyproject.toml
-└── LICENSE
+├── docs/
+│   └── architecture.svg         # architecture diagram
+├── Dockerfile                   # container image for the web app and worker
+├── docker-compose.yml           # local run: MySQL, web, worker, mock API
+├── .dockerignore
+├── .env.example                 # every setting, with safe defaults
+├── .gitattributes               # LF line endings for server and Docker files
+├── .gitignore
+├── pyproject.toml               # ruff and pytest settings
+├── requirements.txt             # runtime dependencies
+├── requirements-dev.txt         # adds test and lint tools
+└── LICENSE                      # MIT
 ```
 
 ## Tests
@@ -249,3 +255,7 @@ PBKDF2-SHA256 password hashing · signed `HttpOnly`, `SameSite=Lax` cookies and 
 ## License
 
 [MIT](LICENSE)
+
+---
+
+Built by **Anvita Arun**
