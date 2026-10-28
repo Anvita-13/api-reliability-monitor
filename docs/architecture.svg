@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>API Reliability Monitor - AWS architecture</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#37475A"/>
+    </marker>
+    <style>
+      .t { fill: #16191F; }
+      .title { font-size: 24px; font-weight: 700; }
+      .h { font-size: 16px; font-weight: 700; }
+      .s { font-size: 13px; }
+      .lbl { font-size: 12.5px; fill: #37475A; font-weight: 600; }
+      .grp { font-size: 13px; font-weight: 700; }
+      .line { stroke: #37475A; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1280" height="820" fill="#FFFFFF"/>
+  <text x="640" y="42" text-anchor="middle" class="t title">API Reliability Monitor · AWS architecture</text>
+
+  <!-- outside AWS -->
+  <rect x="25" y="300" width="140" height="72" rx="10" fill="#F2F3F3" stroke="#545B64" stroke-width="2"/>
+  <text x="95" y="331" text-anchor="middle" class="t h">Users</text>
+  <text x="95" y="352" text-anchor="middle" class="t s">browser / API</text>
+
+  <rect x="25" y="575" width="140" height="80" rx="10" fill="#F2F3F3" stroke="#545B64" stroke-width="2"/>
+  <text x="95" y="606" text-anchor="middle" class="t h">Monitored APIs</text>
+  <text x="95" y="627" text-anchor="middle" class="t s">public internet</text>
+
+  <!-- AWS cloud / region -->
+  <rect x="190" y="70" width="1068" height="730" rx="12" fill="none" stroke="#232F3E" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="206" y="93" class="t grp">AWS Cloud · one Region (e.g. ap-south-1)</text>
+
+  <!-- VPC -->
+  <rect x="215" y="110" width="705" height="672" rx="10" fill="#FBF8FF" stroke="#8C4FFF" stroke-width="2"/>
+  <text x="232" y="133" class="grp" fill="#6B2FD9">VPC 10.0.0.0/16 · 2 Availability Zones</text>
+
+  <!-- public subnets -->
+  <rect x="240" y="148" width="655" height="380" rx="8" fill="#F1F8EC" stroke="#7AA116" stroke-width="1.5"/>
+  <text x="256" y="170" class="grp" fill="#4D6B0E">Public subnets (AZ a, AZ b) · internet gateway</text>
+
+  <rect x="300" y="186" width="535" height="72" rx="8" fill="#FFFFFF" stroke="#8C4FFF" stroke-width="2.5"/>
+  <text x="567" y="214" text-anchor="middle" class="t h">Application Load Balancer</text>
+  <text x="567" y="238" text-anchor="middle" class="t s">HTTP :80 · health check /health · security group: 80 from the internet</text>
+
+  <rect x="300" y="298" width="535" height="210" rx="8" fill="#FFF8F0" stroke="#ED7100" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="318" y="322" class="grp" fill="#B35400">EC2 Auto Scaling group · min 1 / max 2 · targets: CPU 50%, 2000 requests per server</text>
+
+  <rect x="322" y="340" width="236" height="148" rx="8" fill="#FFFFFF" stroke="#ED7100" stroke-width="2.5"/>
+  <text x="440" y="368" text-anchor="middle" class="t h">EC2 server (AZ a)</text>
+  <text x="440" y="392" text-anchor="middle" class="t s">web app (FastAPI) + worker</text>
+  <text x="440" y="414" text-anchor="middle" class="t s">IAM role · IMDSv2 required</text>
+  <text x="440" y="436" text-anchor="middle" class="t s">encrypted EBS disk</text>
+  <text x="440" y="460" text-anchor="middle" class="t s">SG: port 8000 from ALB only</text>
+
+  <rect x="577" y="340" width="236" height="148" rx="8" fill="#FFFFFF" stroke="#ED7100" stroke-width="2.5" stroke-dasharray="6 4"/>
+  <text x="695" y="368" text-anchor="middle" class="t h">EC2 server (AZ b)</text>
+  <text x="695" y="392" text-anchor="middle" class="t s">added when load rises,</text>
+  <text x="695" y="414" text-anchor="middle" class="t s">removed when it falls</text>
+  <text x="695" y="436" text-anchor="middle" class="t s">replaced if unhealthy</text>
+  <text x="695" y="460" text-anchor="middle" class="t s">same image, same config</text>
+
+  <!-- private subnets -->
+  <rect x="240" y="560" width="655" height="200" rx="8" fill="#EEF5FC" stroke="#3B7DDD" stroke-width="1.5"/>
+  <text x="256" y="582" class="grp" fill="#1F5BB5">Private subnets (AZ a, AZ b) · no route to the internet</text>
+
+  <rect x="300" y="598" width="535" height="140" rx="8" fill="#FFFFFF" stroke="#C925D1" stroke-width="2.5"/>
+  <text x="567" y="628" text-anchor="middle" class="t h">Amazon RDS for MySQL</text>
+  <text x="567" y="653" text-anchor="middle" class="t s">endpoints, check results, alert state, incidents, users</text>
+  <text x="567" y="676" text-anchor="middle" class="t s">encrypted at rest (KMS) · TLS in transit · not public</text>
+  <text x="567" y="699" text-anchor="middle" class="t s">automated backups + snapshots (tested restore)</text>
+  <text x="567" y="722" text-anchor="middle" class="t s">security group: 3306 from the app servers only</text>
+
+  <!-- regional services -->
+  <rect x="950" y="110" width="285" height="98" rx="8" fill="#FFFFFF" stroke="#7AA116" stroke-width="2.5"/>
+  <text x="1092" y="138" text-anchor="middle" class="t h">Amazon S3</text>
+  <text x="1092" y="162" text-anchor="middle" class="t s">CSV / JSON report exports</text>
+  <text x="1092" y="184" text-anchor="middle" class="t s">private · encrypted · versioned</text>
+
+  <rect x="950" y="228" width="285" height="98" rx="8" fill="#FFFFFF" stroke="#E7157B" stroke-width="2.5"/>
+  <text x="1092" y="256" text-anchor="middle" class="t h">Amazon SNS</text>
+  <text x="1092" y="280" text-anchor="middle" class="t s">one DOWN + one RECOVERED alert</text>
+  <text x="1092" y="302" text-anchor="middle" class="t s">and alarm notices → e-mail</text>
+
+  <rect x="950" y="364" width="285" height="144" rx="8" fill="#FFFFFF" stroke="#E7157B" stroke-width="2.5"/>
+  <text x="1092" y="392" text-anchor="middle" class="t h">Amazon CloudWatch</text>
+  <text x="1092" y="416" text-anchor="middle" class="t s">logs: web app + worker</text>
+  <text x="1092" y="438" text-anchor="middle" class="t s">custom metric: checks recorded</text>
+  <text x="1092" y="460" text-anchor="middle" class="t s">6 alarms · dashboard</text>
+  <text x="1092" y="482" text-anchor="middle" class="t s">drives Auto Scaling</text>
+
+  <rect x="950" y="528" width="285" height="112" rx="8" fill="#FFFFFF" stroke="#DD344C" stroke-width="2.5"/>
+  <text x="1092" y="556" text-anchor="middle" class="t h">AWS IAM</text>
+  <text x="1092" y="580" text-anchor="middle" class="t s">server role: one topic, one S3 folder,</text>
+  <text x="1092" y="602" text-anchor="middle" class="t s">own logs and metrics only</text>
+  <text x="1092" y="624" text-anchor="middle" class="t s">admins sign in with MFA</text>
+
+  <rect x="950" y="660" width="285" height="98" rx="8" fill="#FFFFFF" stroke="#DD344C" stroke-width="2.5"/>
+  <text x="1092" y="688" text-anchor="middle" class="t h">AWS KMS</text>
+  <text x="1092" y="712" text-anchor="middle" class="t s">keys that encrypt the database,</text>
+  <text x="1092" y="734" text-anchor="middle" class="t s">its snapshots and server disks</text>
+
+  <!-- flows -->
+  <path class="line" d="M165 330 C 230 330, 240 222, 298 222"/>
+  <text x="236" y="207" class="lbl">HTTP :80</text>
+
+  <path class="line" d="M567 258 L567 338"/>
+  <text x="577" y="290" class="lbl">:8000 to healthy servers</text>
+
+  <path class="line" d="M567 488 L567 596"/>
+  <text x="577" y="548" class="lbl">:3306 over TLS</text>
+
+  <path class="line" d="M835 360 C 890 360, 895 160, 948 160"/>
+  <text x="852" y="248" class="lbl">reports</text>
+
+  <path class="line" d="M835 400 C 895 400, 895 278, 948 278"/>
+  <text x="900" y="350" class="lbl">alerts</text>
+
+  <path class="line" d="M835 450 L948 436"/>
+  <text x="846" y="462" class="lbl">logs, metrics</text>
+
+  <path class="line" d="M1092 364 L1092 328"/>
+  <text x="1100" y="350" class="lbl">alarms</text>
+
+  <path class="line" d="M300 470 C 245 470, 230 612, 167 612"/>
+  <text x="40" y="560" class="lbl">HTTPS checks</text>
+</svg>

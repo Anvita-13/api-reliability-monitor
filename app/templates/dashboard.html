@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div><h1>Dashboard</h1><p class="muted">Live status of every monitored API. Updates automatically.</p></div>
+</div>
+
+{% if user.role == 'admin' %}
+<details class="card" id="add-box">
+    <summary class="btn">+ Add endpoint</summary>
+    <form class="form-grid" data-api-form data-method="POST" data-url="/endpoints" style="margin-top:1rem">
+        <div class="field full"><label for="name">Name</label><input id="name" name="name" maxlength="100" required placeholder="Payment API"></div>
+        <div class="field full"><label for="url">URL</label><input id="url" name="url" type="url" maxlength="2048" required placeholder="https://api.example.com/health"></div>
+        <div class="field"><label for="method">Method</label>
+            <select id="method" name="method"><option>GET</option><option>HEAD</option></select></div>
+        <div class="field"><label for="expected_status">Expected status</label><input id="expected_status" name="expected_status" type="number" min="100" max="599" value="200" required></div>
+        <div class="field"><label for="interval_seconds">Check every (seconds)</label><input id="interval_seconds" name="interval_seconds" type="number" min="{{ defaults.min_interval_seconds }}" max="86400" value="{{ defaults.default_interval_seconds }}" required></div>
+        <div class="field"><label for="timeout_seconds">Timeout (seconds)</label><input id="timeout_seconds" name="timeout_seconds" type="number" min="1" max="{{ defaults.max_timeout_seconds }}" value="{{ defaults.default_timeout_seconds }}" required></div>
+        <div class="field"><label for="failure_threshold">Alert after N failures</label><input id="failure_threshold" name="failure_threshold" type="number" min="1" max="100" value="{{ defaults.default_failure_threshold }}" required></div>
+        <div class="field"><label for="latency_threshold_ms">Slow above (ms, optional)</label><input id="latency_threshold_ms" name="latency_threshold_ms" type="number" min="1" placeholder="e.g. 1500"></div>
+        <div class="form-error error-text full" role="alert"></div>
+        <div class="full"><button class="btn" type="submit">Add endpoint</button></div>
+    </form>
+</details>
+{% endif %}
+
+<div id="live" data-live-url="/dashboard?partial=true">
+    {% include "_live.html" %}
+</div>
+{% endblock %}

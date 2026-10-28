@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ endpoint.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <a class="small" href="/dashboard">&laquo; All endpoints</a>
+        <h1>{{ endpoint.name }} <span class="badge {{ endpoint.health.status }}">{{ endpoint.health.status }}</span></h1>
+        <p class="muted mono">{{ endpoint.method }} {{ endpoint.url|safe_url }}</p>
+    </div>
+    {% if user.role == 'admin' %}
+    <div class="actions" id="actions" data-endpoint="{{ endpoint.id }}" data-enabled="{{ 'true' if endpoint.enabled else 'false' }}">
+        <button class="btn" type="button" data-action="check">Check now</button>
+        <button class="btn secondary" type="button" data-action="toggle">{{ 'Disable' if endpoint.enabled else 'Enable' }}</button>
+        <button class="btn danger" type="button" data-action="delete">Delete</button>
+    </div>
+    {% endif %}
+</div>
+
+<nav class="tabs" aria-label="Period">
+    {% for h, label in [(1, '1 hour'), (6, '6 hours'), (24, '24 hours'), (168, '7 days'), (720, '30 days')] %}
+        <a href="?hours={{ h }}" class="{{ 'active' if h == hours }}">{{ label }}</a>
+    {% endfor %}
+</nav>
+
+<div id="live" data-live-url="/dashboard/endpoints/{{ endpoint.id }}?partial=true&hours={{ hours }}">
+    {% include "_endpoint_live.html" %}
+</div>
+
+<div class="card">
+    <h2>Configuration</h2>
+    <dl class="kv">
+        <dt>Expected status</dt><dd>{{ endpoint.expected_status }}</dd>
+        <dt>Interval / timeout</dt><dd>every {{ endpoint.interval_seconds }}s, timeout {{ endpoint.timeout_seconds }}s</dd>
+        <dt>Alert threshold</dt><dd>{{ endpoint.failure_threshold }} consecutive failures</dd>
+        <dt>Slow threshold</dt><dd>{{ (endpoint.latency_threshold_ms ~ ' ms') if endpoint.latency_threshold_ms else 'not set' }}</dd>
+        <dt>Monitoring</dt><dd>{{ 'enabled' if endpoint.enabled else 'disabled' }} &middot; next check {{ endpoint.next_check_at|fmt_dt }}</dd>
+    </dl>
+
+    {% if user.role == 'admin' %}
+    <details style="margin-top:1rem"><summary class="btn secondary sm">Edit settings</summary>
+        <form class="form-grid" data-api-form data-method="PATCH" data-url="/endpoints/{{ endpoint.id }}" style="margin-top:1rem">
+            <div class="field full"><label>Name</label><input name="name" value="{{ endpoint.name }}" maxlength="100" required></div>
+            <div class="field full"><label>URL</label><input name="url" type="url" value="{{ endpoint.url }}" maxlength="2048" required></div>
+            <div class="field"><label>Method</label><select name="method"><option {{ 'selected' if endpoint.method == 'GET' }}>GET</option><option {{ 'selected' if endpoint.method == 'HEAD' }}>HEAD</option></select></div>
+            <div class="field"><label>Expected status</label><input name="expected_status" type="number" min="100" max="599" value="{{ endpoint.expected_status }}" required></div>
+            <div class="field"><label>Check every (seconds)</label><input name="interval_seconds" type="number" min="{{ settings.min_interval_seconds }}" max="86400" value="{{ endpoint.interval_seconds }}" required></div>
+            <div class="field"><label>Timeout (seconds)</label><input name="timeout_seconds" type="number" min="1" max="{{ settings.max_timeout_seconds }}" value="{{ endpoint.timeout_seconds }}" required></div>
+            <div class="field"><label>Alert after N failures</label><input name="failure_threshold" type="number" min="1" max="100" value="{{ endpoint.failure_threshold }}" required></div>
+            <div class="field"><label>Slow above (ms, blank = off)</label><input name="latency_threshold_ms" type="number" min="1" value="{{ endpoint.latency_threshold_ms or '' }}"></div>
+            <div class="form-error error-text full" role="alert"></div>
+            <div class="full"><button class="btn" type="submit">Save changes</button></div>
+        </form>
+    </details>
+
+    <details style="margin-top:.75rem"><summary class="btn secondary sm">Export history</summary>
+        <form class="form-grid" data-export-form data-endpoint="{{ endpoint.id }}" style="margin-top:1rem">
+            <div class="field"><label>Period</label><select name="hours"><option value="24">Last 24 hours</option><option value="168">Last 7 days</option><option value="720">Last 30 days</option></select></div>
+            <div class="field"><label>Format</label><select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></div>
+            <div class="form-error error-text full" role="alert"></div>
+            <div class="full"><button class="btn" type="submit">Create export</button> <span class="export-link"></span></div>
+        </form>
+    </details>
+    {% endif %}
+</div>
+{% endblock %}

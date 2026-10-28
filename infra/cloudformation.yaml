@@ -1,0 +1,713 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  API Reliability Monitor - cloud-native deployment: VPC (2 AZs), Application Load Balancer,
+  EC2 Auto Scaling group, encrypted private RDS MySQL, S3 reports bucket, SNS alerts, CloudWatch
+  logs/metrics/alarms/dashboard and a least-privilege IAM role. COSTS MONEY WHILE IT EXISTS
+  (load balancer, database, servers); delete the stack when you are done.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Application }
+        Parameters: [CodeUrl, AdminUsername, AdminPassword, SecretKey, AlertEmail]
+      - Label: { default: Database }
+        Parameters: [DbMasterPassword, DbAppPassword, DbInstanceClass, BackupRetentionDays]
+      - Label: { default: Servers }
+        Parameters: [InstanceType, MinServers, MaxServers, KeyName, LatestAmiId]
+
+Parameters:
+  CodeUrl:
+    Type: String
+    Description: >-
+      URL of a .zip of this repository, downloaded by every server at boot, e.g.
+      https://github.com/<user>/api-reliability-monitor/archive/refs/heads/main.zip
+    AllowedPattern: "^https://.+"
+  AdminUsername:
+    Type: String
+    Default: admin
+    AllowedPattern: "^[a-z0-9_.-]{3,50}$"
+    Description: First admin login of the web app.
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{12,64}$"
+    ConstraintDescription: 12-64 letters and digits, with at least one of each.
+  SecretKey:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^[A-Za-z0-9]{32,128}$"
+    ConstraintDescription: 32-128 letters and digits (signs the login cookies).
+  AlertEmail:
+    Type: String
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    Description: Receives outage/recovery alerts and alarms (confirm the e-mail from AWS).
+  DbMasterPassword:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^[A-Za-z0-9]{12,41}$"
+    ConstraintDescription: 12-41 letters and digits.
+  DbAppPassword:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^[A-Za-z0-9]{12,41}$"
+    ConstraintDescription: 12-41 letters and digits (the application's own database user).
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small, db.t3.micro]
+  BackupRetentionDays:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 35
+    Description: Days of automated database backups (some free plans allow only 1).
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+  MinServers:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 4
+  MaxServers:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 8
+  KeyName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 key pair name. No SSH port is opened either way.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Conditions:
+  HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+
+Resources:
+  # ---------------------------------------------------------------- network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-igw" }]
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-1" }]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.16.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-2" }]
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.128.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-1" }]
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.144.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-2" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public" }]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1Routes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnet1, RouteTableId: !Ref PublicRouteTable }
+
+  PublicSubnet2Routes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnet2, RouteTableId: !Ref PublicRouteTable }
+
+  # No route to the internet: the database subnets stay private.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private" }]
+
+  PrivateSubnet1Routes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnet1, RouteTableId: !Ref PrivateRouteTable }
+
+  PrivateSubnet2Routes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnet2, RouteTableId: !Ref PrivateRouteTable }
+
+  # ------------------------------------------------- security groups (chained)
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Load balancer - HTTP from the internet
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-alb-sg" }]
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: App servers - port 8000 from the load balancer only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          Description: App traffic from the load balancer
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-sg" }]
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database - MySQL from the app servers only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: MySQL from the app servers
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-db-sg" }]
+
+  # --------------------------------------------------------------- database
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the database
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete          # no final snapshot is kept (it would keep costing)
+    UpdateReplacePolicy: Snapshot
+    Metadata:
+      cfn-lint:
+        config:
+          # Password from a NoEcho parameter instead of Secrets Manager, which is not free.
+          ignore_checks: [W1011]
+    Properties:
+      Engine: mysql                 # no EngineVersion: AWS uses its current default (8.0.16+ needed)
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: api_monitor
+      MasterUsername: monitoradmin
+      MasterUserPassword: !Ref DbMasterPassword
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-db" }]
+
+  # ---------------------------------------------------------- report storage
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+
+  # Empties the versioned bucket when the stack is deleted, so deletion never gets stuck.
+  BucketCleanerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: empty-reports-bucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:ListBucketVersions]
+                Resource: !GetAtt ReportsBucket.Arn
+              - Effect: Allow
+                Action: [s3:DeleteObject, s3:DeleteObjectVersion]
+                Resource: !Sub "${ReportsBucket.Arn}/*"
+
+  # Owned by the stack (instead of the one Lambda creates itself), so it is removed on delete.
+  BucketCleanerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      RetentionInDays: 1
+
+  BucketCleanerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt BucketCleanerRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref BucketCleanerLogGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event["RequestType"] == "Delete":
+                      bucket = boto3.resource("s3").Bucket(event["ResourceProperties"]["BucketName"])
+                      bucket.object_versions.delete()
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as exc:  # report the failure instead of hanging the stack
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(exc)})
+
+  EmptyReportsBucketOnDelete:
+    Type: Custom::EmptyBucket
+    Properties:
+      ServiceToken: !GetAtt BucketCleanerFunction.Arn
+      BucketName: !Ref ReportsBucket
+
+  # ----------------------------------------------------------------- alerts
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: API Monitor
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ------------------------------------------------- least-privilege server role
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: app-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishAlerts
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertTopic
+              - Sid: ReportsObjects
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub "${ReportsBucket.Arn}/exports/*"
+              - Sid: ReportsList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ReportsBucket.Arn
+                Condition: { StringLike: { "s3:prefix": "exports/*" } }
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource:
+                  - !Sub "${WebLogGroup.Arn}"
+                  - !Sub "${WorkerLogGroup.Arn}"
+              - Sid: Metrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals: { "cloudwatch:namespace": [!Ref "AWS::StackName", CWAgent] }
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+
+  WebLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/web"
+      RetentionInDays: 7
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/worker"
+      RetentionInDays: 7
+
+  # ------------------------------------------------------------ load balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      Protocol: HTTP
+      Port: 8000
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher: { HttpCode: "200" }
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: "30" }
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions: [{ Type: forward, TargetGroupArn: !Ref TargetGroup }]
+
+  # ---------------------------------------------------------------- servers
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !If [HasKeyName, !Ref KeyName, !Ref "AWS::NoValue"]
+        IamInstanceProfile: { Arn: !GetAtt AppInstanceProfile.Arn }
+        SecurityGroupIds: [!Ref AppSecurityGroup]
+        MetadataOptions: { HttpTokens: required, HttpPutResponseHopLimit: 1, HttpEndpoint: enabled }
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: { VolumeSize: 8, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app" }]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # First boot: install the app from CodeUrl, prepare the database, start the services.
+            set -euo pipefail
+            exec > >(tee -a /var/log/monitor-bootstrap.log) 2>&1
+            signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource AppGroup --region ${AWS::Region} || true; }
+            trap 'signal 1' ERR
+
+            dnf install -y python3.12 python3.12-pip unzip amazon-cloudwatch-agent aws-cfn-bootstrap
+
+            id monitor >/dev/null 2>&1 || useradd --system --home-dir /opt/monitor --shell /sbin/nologin monitor
+            mkdir -p /opt/monitor /var/log/monitor
+
+            # code: the zip may hold the files directly or inside one top-level folder (GitHub archives)
+            curl -fsSL --retry 5 "${CodeUrl}" -o /tmp/code.zip
+            rm -rf /tmp/code /opt/monitor/app && mkdir -p /tmp/code
+            unzip -q /tmp/code.zip -d /tmp/code
+            if [ "$(ls -A /tmp/code | wc -l)" -eq 1 ] && [ -d "/tmp/code/$(ls -A /tmp/code)" ]; then
+              mv "/tmp/code/$(ls -A /tmp/code)" /opt/monitor/app
+            else
+              mv /tmp/code /opt/monitor/app
+            fi
+            python3.12 -m venv /opt/monitor/venv
+            /opt/monitor/venv/bin/pip install --quiet --upgrade pip
+            /opt/monitor/venv/bin/pip install --quiet -r /opt/monitor/app/requirements.txt
+            curl -fsSL --retry 5 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /opt/monitor/rds-ca.pem
+
+            cat > /opt/monitor/app/.env <<'ENV'
+            APP_ENV=production
+            SECRET_KEY=${SecretKey}
+            SESSION_COOKIE_SECURE=false
+            DB_HOST=${Database.Endpoint.Address}
+            DB_PORT=3306
+            DB_NAME=api_monitor
+            DB_USER=monitor_app
+            DB_PASSWORD=${DbAppPassword}
+            DB_SSL_CA=/opt/monitor/rds-ca.pem
+            ALLOW_PRIVATE_TARGETS=false
+            NOTIFICATION_BACKEND=sns
+            SNS_TOPIC_ARN=${AlertTopic}
+            AWS_REGION=${AWS::Region}
+            STORAGE_BACKEND=s3
+            S3_BUCKET=${ReportsBucket}
+            S3_PREFIX=
+            METRICS_BACKEND=cloudwatch
+            METRICS_NAMESPACE=${AWS::StackName}
+            ENV
+            chmod 600 /opt/monitor/app/.env
+            chown -R monitor:monitor /opt/monitor /var/log/monitor
+
+            # database user, tables, first admin, sample endpoint (idempotent)
+            cd /opt/monitor/app
+            runuser -u monitor -- env DB_MASTER_USER=monitoradmin DB_MASTER_PASSWORD='${DbMasterPassword}' \
+              ADMIN_USERNAME='${AdminUsername}' ADMIN_PASSWORD='${AdminPassword}' \
+              /opt/monitor/venv/bin/python scripts/provision_aws.py
+
+            install -m 644 infra/server/monitor-web.service infra/server/monitor-worker.service /etc/systemd/system/
+            install -m 644 infra/server/monitor.logrotate /etc/logrotate.d/monitor
+            sed "s#__LOG_GROUP_PREFIX__#/${AWS::StackName}#g" infra/server/cloudwatch-agent.json \
+              > /opt/aws/amazon-cloudwatch-agent/etc/monitor.json
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/monitor.json
+            systemctl daemon-reload
+            systemctl enable --now monitor-web monitor-worker
+
+            for i in $(seq 1 60); do
+              if curl -fsS http://127.0.0.1:8000/health; then break; fi
+              sleep 5
+            done
+            curl -fsS http://127.0.0.1:8000/health
+            signal 0
+
+  AppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    # EmptyReportsBucketOnDelete: on stack deletion the servers go first, then the bucket is emptied.
+    DependsOn: [PublicDefaultRoute, PublicSubnet1Routes, PublicSubnet2Routes, EmptyReportsBucketOnDelete]
+    CreationPolicy:
+      ResourceSignal: { Count: !Ref MinServers, Timeout: PT25M }
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: !Ref MinServers
+        MaxBatchSize: 1
+        PauseTime: PT25M
+        WaitOnResourceSignals: true
+    Properties:
+      MinSize: !Ref MinServers
+      MaxSize: !Ref MaxServers
+      DesiredCapacity: !Ref MinServers
+      VPCZoneIdentifier: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs: [!Ref TargetGroup]
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 600
+      MetricsCollection:
+        - Granularity: 1Minute
+          Metrics: [GroupInServiceInstances, GroupDesiredCapacity]
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-app", PropagateAtLaunch: true }
+
+  CpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ASGAverageCPUUtilization }
+        TargetValue: 50
+
+  RequestScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    DependsOn: HttpListener
+    Properties:
+      AutoScalingGroupName: !Ref AppGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub "${LoadBalancer.LoadBalancerFullName}/${TargetGroup.TargetGroupFullName}"
+        TargetValue: 2000
+
+  # ----------------------------------------------------------------- alarms
+  AppCpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: App servers CPU above 80%
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{ Name: AutoScalingGroupName, Value: !Ref AppGroup }]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  UnhealthyHostsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: At least one app server failing load balancer health checks
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - { Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }
+        - { Name: TargetGroup, Value: !GetAtt TargetGroup.TargetGroupFullName }
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  LoadBalancer5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Load balancer returned 5 or more 5xx errors in 5 minutes
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions: [{ Name: LoadBalancer, Value: !GetAtt LoadBalancer.LoadBalancerFullName }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  DatabaseCpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Database CPU above 80%
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions: [{ Name: DBInstanceIdentifier, Value: !Ref Database }]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  DatabaseLowStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Database free storage below 2 GB
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions: [{ Name: DBInstanceIdentifier, Value: !Ref Database }]
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2000000000
+      ComparisonOperator: LessThanThreshold
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # Silent-failure guard: the worker publishes ChecksRecorded after every batch; none for 10 minutes
+  # means the worker has stopped (missing data counts as breaching).
+  NoChecksRecordedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: No checks recorded for 10 minutes - the worker may have stopped
+      Namespace: !Ref "AWS::StackName"
+      MetricName: ChecksRecorded
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-operations"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {"type": "metric", "x": 0, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Checks recorded per 5 min", "region": "${AWS::Region}", "stat": "Sum", "period": 300,
+              "metrics": [["${AWS::StackName}", "ChecksRecorded"]]}},
+            {"type": "metric", "x": 8, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Servers in service", "region": "${AWS::Region}", "stat": "Maximum", "period": 60,
+              "metrics": [["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", "${AppGroup}"]]}},
+            {"type": "metric", "x": 16, "y": 0, "width": 8, "height": 6, "properties": {
+              "title": "Load balancer targets", "region": "${AWS::Region}", "stat": "Maximum", "period": 60,
+              "metrics": [
+                ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${TargetGroup.TargetGroupFullName}", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}"],
+                [".", "UnHealthyHostCount", ".", ".", ".", "."]]}},
+            {"type": "metric", "x": 0, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "Requests and 5xx errors", "region": "${AWS::Region}", "stat": "Sum", "period": 60,
+              "metrics": [
+                ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}"],
+                [".", "HTTPCode_ELB_5XX_Count", ".", "."]]}},
+            {"type": "metric", "x": 8, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "App servers CPU %", "region": "${AWS::Region}", "stat": "Average", "period": 300,
+              "metrics": [["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${AppGroup}"]]}},
+            {"type": "metric", "x": 16, "y": 6, "width": 8, "height": 6, "properties": {
+              "title": "Database CPU % and connections", "region": "${AWS::Region}", "stat": "Average", "period": 300,
+              "metrics": [
+                ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${Database}"],
+                [".", "DatabaseConnections", ".", ".", {"yAxis": "right"}]]}},
+            {"type": "alarm", "x": 0, "y": 12, "width": 24, "height": 4, "properties": {
+              "title": "Alarms",
+              "alarms": ["${AppCpuHighAlarm.Arn}", "${UnhealthyHostsAlarm.Arn}", "${LoadBalancer5xxAlarm.Arn}",
+                         "${DatabaseCpuHighAlarm.Arn}", "${DatabaseLowStorageAlarm.Arn}", "${NoChecksRecordedAlarm.Arn}"]}}
+          ]
+        }
+
+Outputs:
+  AppUrl:
+    Description: Open this in a browser and sign in with AdminUsername / AdminPassword
+    Value: !Sub "http://${LoadBalancer.DNSName}"
+  DashboardUrl:
+    Description: CloudWatch operations dashboard
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards/dashboard/${AWS::StackName}-operations"
+  ReportsBucketName:
+    Value: !Ref ReportsBucket
+  AlertTopicArn:
+    Value: !Ref AlertTopic

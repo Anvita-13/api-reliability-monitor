@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="login-wrap">
+    <div class="login-brand"><span class="pulse big"></span><h1>{{ app_name }}</h1>
+        <p class="muted">Watch your APIs. Get told before your users are.</p></div>
+    <form class="card" id="login-form" autocomplete="on">
+        <div class="field"><label for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" required autofocus></div>
+        <div class="field"><label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required></div>
+        <div id="login-error" class="error-text" role="alert"></div>
+        <button class="btn" type="submit" style="width:100%">Sign in</button>
+    </form>
+</div>
+{% endblock %}

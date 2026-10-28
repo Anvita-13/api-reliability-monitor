@@ -1,0 +1,19 @@
+# Web app + JSON API (port 8000, behind the Application Load Balancer).
+# --proxy-headers: trust X-Forwarded-For from the load balancer (inside the VPC) so per-client
+# limits such as the login rate limiter see the real client address.
+[Unit]
+Description=API Reliability Monitor - web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=monitor
+WorkingDirectory=/opt/monitor/app
+ExecStart=/opt/monitor/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=10.0.0.0/16
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/monitor/web.log
+StandardError=append:/var/log/monitor/web.log
+
+[Install]
+WantedBy=multi-user.target

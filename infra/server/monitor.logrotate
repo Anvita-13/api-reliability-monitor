@@ -1,0 +1,9 @@
+/var/log/monitor/*.log {
+    daily
+    rotate 3
+    maxsize 50M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

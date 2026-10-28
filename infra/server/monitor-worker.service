@@ -1,0 +1,18 @@
+# Monitoring worker: claims due endpoints, runs checks, records results, sends alerts.
+# Safe to run on every server at once (rows are claimed with SELECT ... FOR UPDATE SKIP LOCKED).
+[Unit]
+Description=API Reliability Monitor - worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=monitor
+WorkingDirectory=/opt/monitor/app
+ExecStart=/opt/monitor/venv/bin/python -m app.worker
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/monitor/worker.log
+StandardError=append:/var/log/monitor/worker.log
+
+[Install]
+WantedBy=multi-user.target

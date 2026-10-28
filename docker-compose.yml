@@ -1,0 +1,68 @@
+# Local demo: MySQL + web app + worker + a switchable mock API, one command:
+#     docker compose up --build        ->  http://localhost:8000   (admin / Admin@123)
+# The passwords below are for this local demo only. Never reuse them on a real server.
+
+x-app-env: &app-env
+  APP_ENV: development
+  SECRET_KEY: local-demo-secret-key-not-for-production-0001
+  DB_HOST: db
+  DB_PORT: "3306"
+  DB_NAME: api_monitor
+  DB_USER: monitor
+  DB_PASSWORD: monitor-local-only
+  # Local only: lets the demo endpoints reach the mock API on 127.0.0.1. Keep false anywhere real.
+  ALLOW_PRIVATE_TARGETS: "true"
+
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root-local-only
+      MYSQL_DATABASE: api_monitor
+      MYSQL_USER: monitor
+      MYSQL_PASSWORD: monitor-local-only
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot-local-only --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - db-data:/var/lib/mysql
+
+  # One-off: tables + demo users + demo endpoints, then exits.
+  init:
+    build: .
+    environment: *app-env
+    command: ["python", "scripts/init_db.py", "--seed"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  web:
+    build: .
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      init: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build: .
+    environment: *app-env
+    command: ["python", "-m", "app.worker"]
+    ports: ["9100:9100"]   # the mock API shares this container's network (see below)
+    depends_on:
+      init: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  # Runs inside the worker's network, so the demo endpoints' 127.0.0.1:9100 reach it.
+  # Switch it:  curl -X POST "http://localhost:9100/__mode?value=down"   (and value=up)
+  mock:
+    build: .
+    command: ["python", "tests/mock_server.py", "--host", "0.0.0.0", "--port", "9100"]
+    network_mode: "service:worker"
+    depends_on: [worker]
+    restart: unless-stopped
+
+volumes:
+  db-data:

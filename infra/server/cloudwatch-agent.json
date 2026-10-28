@@ -1,0 +1,20 @@
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/monitor/web.log",
+            "log_group_name": "__LOG_GROUP_PREFIX__/web",
+            "log_stream_name": "{instance_id}"
+          },
+          {
+            "file_path": "/var/log/monitor/worker.log",
+            "log_group_name": "__LOG_GROUP_PREFIX__/worker",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}

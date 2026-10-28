@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% endblock %} &middot; {{ app_name }}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+{% if user %}
+<header class="topbar">
+    <a class="brand" href="/dashboard"><span class="pulse"></span>{{ app_name }}</a>
+    <nav>
+        <a href="/dashboard" class="{{ 'active' if request.url.path == '/dashboard' else '' }}">Dashboard</a>
+        <a href="/docs" target="_blank" rel="noopener">API docs</a>
+    </nav>
+    <div class="who"><span>{{ user.username }} <span class="badge blue">{{ user.role }}</span></span>
+        <button type="button" id="logout" class="btn secondary sm">Log out</button></div>
+</header>
+{% endif %}
+<main class="content">
+    {% block content %}{% endblock %}
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[project]
+name = "api-reliability-monitor"
+version = "1.0.0"
+description = "Periodically checks API endpoints, records availability and latency, and alerts on repeated failures."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008"]  # FastAPI's Depends(...) in argument defaults is the idiom
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402"]
+"tests/*" = ["E702", "E701", "E501"]

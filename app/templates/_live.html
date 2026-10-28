@@ -1,0 +1,49 @@
+<div class="stats">
+    <div class="stat"><div class="num">{{ overview.total }}</div><div class="lbl">Endpoints</div></div>
+    <div class="stat ok"><div class="num">{{ overview.healthy }}</div><div class="lbl">Healthy</div></div>
+    <div class="stat warn"><div class="num">{{ overview.degraded }}</div><div class="lbl">Degraded</div></div>
+    <div class="stat bad"><div class="num">{{ overview.unhealthy }}</div><div class="lbl">Unhealthy</div></div>
+    <div class="stat"><div class="num">{{ overview.availability_pct ~ '%' if overview.availability_pct is not none else '—' }}</div>
+        <div class="lbl">Availability, last 24h ({{ overview.checks_24h }} checks)</div></div>
+</div>
+
+<div class="card flush">
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Endpoint</th><th>Status</th><th>Last check</th><th>Latency</th><th>24h availability</th><th>Every</th></tr></thead>
+            <tbody>
+            {% for e in endpoints %}
+                <tr class="{{ 'row-bad' if e.health.status == 'unhealthy' }}">
+                    <td><a class="cell-title" href="/dashboard/endpoints/{{ e.id }}">{{ e.name }}</a>
+                        <div class="cell-sub">{{ e.method }} {{ e.url|safe_url }}</div></td>
+                    <td><span class="badge {{ e.health.status }}">{{ e.health.status }}</span>
+                        {% if e.health.consecutive_failures %}<div class="cell-sub">{{ e.health.consecutive_failures }} failed in a row</div>{% endif %}</td>
+                    <td class="nowrap">{{ e.health.last_checked_at|ago }}
+                        {% if e.health.last_checked_at and not e.health.last_success %}<div class="cell-sub err">{{ e.health.last_error_type or ('HTTP ' ~ e.health.last_status_code) }}</div>{% endif %}</td>
+                    <td class="nowrap">{{ (e.health.last_latency_ms ~ ' ms') if e.health.last_latency_ms is not none else '—' }}</td>
+                    <td>{% set a = availability.get(e.id) %}{{ (a ~ '%') if a is not none else '—' }}</td>
+                    <td class="nowrap">{{ e.interval_seconds }}s</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6" class="empty">No endpoints yet.{% if user.role == 'admin' %} Add one above to start monitoring.{% endif %}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recent incidents</h2>
+    <ul class="timeline">
+    {% for event, name in events %}
+        <li><span class="dot {{ 'bad' if event.kind == 'alert' else 'ok' }}"></span>
+            <div><strong>{{ name }}</strong>
+                {% if event.kind == 'alert' %}went <span class="badge unhealthy">unhealthy</span> after {{ event.consecutive_failures }} failures
+                    <div class="cell-sub">{{ event.message }}</div>
+                {% else %}<span class="badge healthy">recovered</span>{% endif %}
+                <div class="cell-sub">{{ event.created_at|fmt_dt }}{% if not event.delivered %} &middot; notification not delivered{% endif %}</div></div></li>
+    {% else %}
+        <li class="muted">No incidents recorded.</li>
+    {% endfor %}
+    </ul>
+</div>
